@@ -21,4 +21,4 @@ simple, chat to gpt from telegram bot
         -e OPENAPI_TOKEN={YOUR_OPENAI_TOKEN} \
         -e TGBOT_TOKEN={YOUR_TELEGRAM_BOT_TOKEN} \
         --name openai-tgbot \
-        openai-tgbot
+        oneir0313/openai-tgbot
