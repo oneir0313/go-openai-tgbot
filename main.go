@@ -18,10 +18,10 @@ import (
 )
 
 var (
-	tgToken string
+	tgToken     string
 	openaiToken string
-	stream bool
-	aiModel string
+	stream      bool
+	aiModel     string
 )
 
 func init() {
@@ -37,8 +37,9 @@ func init() {
 	flag.BoolVar(&stream, "stream", false, "use streaming")
 }
 
-
 func main() {
+	messages := make([]openai.ChatCompletionMessage, 0)
+
 	flag.Parse()
 	pref := tele.Settings{
 		Token:  tgToken,
@@ -47,7 +48,6 @@ func main() {
 
 	client := openai.NewClient(openaiToken)
 
-
 	b, err := tele.NewBot(pref)
 	if err != nil {
 		log.Fatal(err)
@@ -55,6 +55,7 @@ func main() {
 	}
 
 	if stream {
+		// TODO: stream is not stable
 		fmt.Println("Handle stream")
 		b.Handle(tele.OnText, func(c tele.Context) error {
 			// All the text messages that weren't
@@ -68,9 +69,9 @@ func main() {
 				user = c.Sender()
 				text = c.Text()
 			)
-			go func () {
+			go func() {
 				defer wg.Done()
-	
+
 				req := openai.ChatCompletionRequest{
 					Model:     aiModel,
 					MaxTokens: 20,
@@ -89,7 +90,8 @@ func main() {
 					return
 				}
 				defer stream.Close()
-			
+
+				// receiver
 				for {
 					response, err := stream.Recv()
 					if errors.Is(err, io.EOF) {
@@ -97,17 +99,18 @@ func main() {
 						fmt.Println("Stream finished")
 						return
 					}
-			
+
 					if err != nil {
 						fmt.Printf("Stream error: %v\n", err)
 						return
 					}
-					
+
 					ch <- response.Choices[0].Delta.Content
 					fmt.Printf("Stream response: %v\n", response)
 				}
 			}()
-	
+
+			// sender
 			go func() {
 				defer wg.Done()
 				var lastResp string
@@ -116,19 +119,19 @@ func main() {
 					defer func() {
 						lastResp = msg
 					}()
-			
+
 					if len(strings.Trim(msg, "\n")) == 0 {
 						time.Sleep(time.Microsecond * 50)
 						return nil
 					}
-			
+
 					if sent == nil {
 						var err error
-			
+
 						sent, err = b.Send(user, msg)
 						return err
 					}
-			
+
 					if msg == lastResp {
 						return nil
 					}
@@ -136,15 +139,15 @@ func main() {
 					if _, err := b.Edit(sent, msg); err != nil {
 						return err
 					}
-			
+
 					return nil
 				}
-				
+
 				for {
 					select {
-					case <- done:
+					case <-done:
 						return
-					case msg := <- ch:
+					case msg := <-ch:
 						err := send(msg)
 						if err != nil {
 							fmt.Printf("telegram bot send: %s\n", err.Error())
@@ -152,10 +155,9 @@ func main() {
 					}
 				}
 			}()
-		
-	
+
 			wg.Wait()
-	
+
 			return nil
 		})
 	} else {
@@ -164,27 +166,37 @@ func main() {
 			var (
 				text = c.Text()
 			)
-			
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: text,
+			})
 			resp, err := client.CreateChatCompletion(
 				context.Background(),
 				openai.ChatCompletionRequest{
-					Model: aiModel,
-					Messages: []openai.ChatCompletionMessage{
-						{
-							Role:    openai.ChatMessageRoleUser,
-							Content: text,
-						},
-					},
+					Model:    aiModel,
+					Messages: messages,
 				},
 			)
-		
+
 			if err != nil {
 				errResp := fmt.Sprintf("ChatCompletion error: %v\n", err)
 				return c.Send(errResp)
 			}
-			return c.Send(resp.Choices[0].Message.Content)
+			content := resp.Choices[0].Message.Content
+
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleAssistant,
+				Content: content,
+			})
+			return c.Send(content, tele.ModeMarkdown)
 		})
 	}
+
+	b.Handle("/clean", func(c tele.Context) error {
+		messages = make([]openai.ChatCompletionMessage, 0)
+		return c.Send("Your conversation has been cleaned!")
+	})
+
 	fmt.Printf("openai tgbot start, your model is: %s", aiModel)
 
 	b.Start()
